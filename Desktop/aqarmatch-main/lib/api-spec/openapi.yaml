@@ -1,0 +1,665 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: AqarMatch API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: listings
+    description: Property listing operations
+  - name: stats
+    description: Statistics and aggregates
+  - name: notifications
+    description: In-app seller notifications
+
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /listings:
+    get:
+      operationId: getListings
+      tags: [listings]
+      summary: Browse property listings
+      parameters:
+        - in: query
+          name: deal_type
+          schema:
+            type: string
+        - in: query
+          name: wilaya
+          schema:
+            type: string
+        - in: query
+          name: municipality
+          schema:
+            type: string
+        - in: query
+          name: max_price
+          schema:
+            type: number
+      responses:
+        "200":
+          description: List of listings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Listing"
+    post:
+      operationId: createListing
+      tags: [listings]
+      summary: Create a new property listing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ListingInput"
+      responses:
+        "201":
+          description: Listing created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Listing"
+        "400":
+          description: Validation error
+
+  /listings/stats:
+    get:
+      operationId: getListingStats
+      tags: [stats]
+      summary: Get listing statistics
+      responses:
+        "200":
+          description: Statistics summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListingStats"
+
+  /listings/{id}:
+    get:
+      operationId: getListing
+      tags: [listings]
+      summary: Get a single listing
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Listing detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Listing"
+        "404":
+          description: Not found
+
+  /listings/{id}/match:
+    post:
+      operationId: matchListing
+      tags: [listings]
+      summary: Check if buyer budget matches listing
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MatchRequest"
+      responses:
+        "200":
+          description: Match result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MatchResult"
+        "404":
+          description: Listing not found
+
+  /listings/{id}/renew:
+    post:
+      operationId: renewListing
+      tags: [listings]
+      summary: Renew a listing for another 30 days
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenewRequest"
+      responses:
+        "200":
+          description: Listing renewed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Listing"
+        "403":
+          description: Phone number does not match listing owner
+        "404":
+          description: Listing not found
+
+  /analytics/seller:
+    get:
+      operationId: fetchSellerAnalytics
+      tags: [listings]
+      summary: Get daily match attempt trend data for all seller listings
+      parameters:
+        - in: query
+          name: phone
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: period_days
+          schema:
+            type: integer
+            default: 30
+      responses:
+        "200":
+          description: Analytics data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerAnalytics"
+        "404":
+          description: No listings found
+
+  /notifications:
+    get:
+      operationId: getNotifications
+      tags: [notifications]
+      summary: Get in-app notifications for a seller (expiring listings summary)
+      parameters:
+        - in: query
+          name: phone
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Notifications for the seller
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationSummary"
+
+  /notifications/mark-seen:
+    post:
+      operationId: markNotificationsSeen
+      tags: [notifications]
+      summary: Mark all notifications as seen for a seller
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarkSeenRequest"
+      responses:
+        "200":
+          description: Marked as seen
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarkSeenResult"
+
+  /sellers/{phone}/inquiries:
+    get:
+      operationId: getSellerInquiries
+      tags: [listings]
+      summary: Get all listings and match attempts for a seller by phone number
+      parameters:
+        - in: path
+          name: phone
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Seller inquiry summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SellerInquirySummary"
+        "404":
+          description: No listings found for this phone
+
+  /wilayat:
+    get:
+      operationId: getWilayat
+      tags: [listings]
+      summary: Get list of Algerian provinces
+      responses:
+        "200":
+          description: List of wilayas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Wilaya"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    Listing:
+      type: object
+      required:
+        - id
+        - deal_type
+        - wilaya
+        - municipality
+        - neighborhoods
+        - asking_price
+        - user_phone
+        - created_at
+        - expires_at
+        - is_active
+        - days_remaining
+      properties:
+        id:
+          type: integer
+        deal_type:
+          type: string
+          enum: [بيع, إيجار]
+        wilaya:
+          type: string
+        municipality:
+          type: string
+        neighborhoods:
+          type: array
+          items:
+            type: string
+        asking_price:
+          type: number
+        user_phone:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        is_active:
+          type: boolean
+        days_remaining:
+          type: integer
+
+    ListingInput:
+      type: object
+      required:
+        - deal_type
+        - wilaya
+        - municipality
+        - neighborhoods
+        - asking_price
+        - floor_price
+        - user_phone
+      properties:
+        deal_type:
+          type: string
+          enum: [بيع, إيجار]
+        wilaya:
+          type: string
+        municipality:
+          type: string
+        neighborhoods:
+          type: array
+          items:
+            type: string
+        asking_price:
+          type: number
+        floor_price:
+          type: number
+        user_phone:
+          type: string
+
+    RenewRequest:
+      type: object
+      required:
+        - seller_phone
+      properties:
+        seller_phone:
+          type: string
+
+    MatchRequest:
+      type: object
+      required:
+        - budget
+        - buyer_phone
+      properties:
+        budget:
+          type: number
+        buyer_phone:
+          type: string
+
+    MatchResult:
+      type: object
+      required:
+        - matched
+        - listing_id
+      properties:
+        matched:
+          type: boolean
+        listing_id:
+          type: integer
+        seller_phone:
+          type: ["string", "null"]
+        message:
+          type: string
+
+    ListingStats:
+      type: object
+      required:
+        - total
+        - for_sale
+        - for_rent
+        - by_wilaya
+        - recent_listings
+      properties:
+        total:
+          type: integer
+        for_sale:
+          type: integer
+        for_rent:
+          type: integer
+        by_wilaya:
+          type: array
+          items:
+            $ref: "#/components/schemas/WilayaCount"
+        recent_listings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Listing"
+
+    WilayaCount:
+      type: object
+      required:
+        - wilaya
+        - count
+      properties:
+        wilaya:
+          type: string
+        count:
+          type: integer
+
+    Wilaya:
+      type: object
+      required:
+        - code
+        - name
+        - name_ar
+      properties:
+        code:
+          type: integer
+        name:
+          type: string
+        name_ar:
+          type: string
+
+    DailyDataPoint:
+      type: object
+      required:
+        - date
+        - total
+        - matched
+      properties:
+        date:
+          type: string
+          format: date
+        total:
+          type: integer
+        matched:
+          type: integer
+
+    ListingAnalytics:
+      type: object
+      required:
+        - listing_id
+        - deal_type
+        - wilaya
+        - municipality
+        - total_inquiries
+        - matched_count
+        - recent_inquiries
+        - recent_matched
+      properties:
+        listing_id:
+          type: integer
+        deal_type:
+          type: string
+        wilaya:
+          type: string
+        municipality:
+          type: string
+        total_inquiries:
+          type: integer
+        matched_count:
+          type: integer
+        recent_inquiries:
+          type: integer
+        recent_matched:
+          type: integer
+
+    SellerAnalytics:
+      type: object
+      required:
+        - phone
+        - days
+        - total_inquiries
+        - total_matched
+        - daily_data
+        - by_listing
+      properties:
+        phone:
+          type: string
+        days:
+          type: integer
+        total_inquiries:
+          type: integer
+        total_matched:
+          type: integer
+        daily_data:
+          type: array
+          items:
+            $ref: "#/components/schemas/DailyDataPoint"
+        by_listing:
+          type: array
+          items:
+            $ref: "#/components/schemas/ListingAnalytics"
+
+    ExpiringListingAlert:
+      type: object
+      required:
+        - listing_id
+        - deal_type
+        - wilaya
+        - municipality
+        - days_remaining
+        - total_inquiries
+        - matched_count
+        - asking_price
+      properties:
+        listing_id:
+          type: integer
+        deal_type:
+          type: string
+        wilaya:
+          type: string
+        municipality:
+          type: string
+        days_remaining:
+          type: integer
+        total_inquiries:
+          type: integer
+        matched_count:
+          type: integer
+        asking_price:
+          type: number
+
+    NotificationSummary:
+      type: object
+      required:
+        - phone
+        - unseen_count
+        - expiring_listings
+        - has_alerts
+      properties:
+        phone:
+          type: string
+        unseen_count:
+          type: integer
+        has_alerts:
+          type: boolean
+        expiring_listings:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExpiringListingAlert"
+
+    MarkSeenRequest:
+      type: object
+      required:
+        - phone
+      properties:
+        phone:
+          type: string
+
+    MarkSeenResult:
+      type: object
+      required:
+        - updated
+      properties:
+        updated:
+          type: integer
+
+    MatchAttempt:
+      type: object
+      required:
+        - id
+        - buyer_phone
+        - budget
+        - matched
+        - created_at
+      properties:
+        id:
+          type: integer
+        buyer_phone:
+          type: string
+        budget:
+          type: number
+        matched:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    ListingWithInquiries:
+      type: object
+      required:
+        - id
+        - deal_type
+        - wilaya
+        - municipality
+        - neighborhoods
+        - asking_price
+        - created_at
+        - expires_at
+        - is_active
+        - days_remaining
+        - matches
+        - total_inquiries
+        - matched_count
+      properties:
+        id:
+          type: integer
+        deal_type:
+          type: string
+        wilaya:
+          type: string
+        municipality:
+          type: string
+        neighborhoods:
+          type: array
+          items:
+            type: string
+        asking_price:
+          type: number
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        is_active:
+          type: boolean
+        days_remaining:
+          type: integer
+        matches:
+          type: array
+          items:
+            $ref: "#/components/schemas/MatchAttempt"
+        total_inquiries:
+          type: integer
+        matched_count:
+          type: integer
+
+    SellerInquirySummary:
+      type: object
+      required:
+        - phone
+        - total_listings
+        - total_inquiries
+        - total_matched
+        - listings
+      properties:
+        phone:
+          type: string
+        total_listings:
+          type: integer
+        total_inquiries:
+          type: integer
+        total_matched:
+          type: integer
+        listings:
+          type: array
+          items:
+            $ref: "#/components/schemas/ListingWithInquiries"

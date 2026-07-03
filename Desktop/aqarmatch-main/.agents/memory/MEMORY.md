@@ -1,0 +1,1 @@
+- [DB migrations non-interactive](db-migrations.md) — drizzle-kit push requires TTY for data-loss prompts; use raw SQL via executeSql instead for non-null column additions.

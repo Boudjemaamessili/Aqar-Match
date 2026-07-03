@@ -1,0 +1,51 @@
+import React, { useState } from 'react';
+import { supabase } from './supabaseClient';
+
+export default function ListingForm() {
+  const [formData, setFormData] = useState({
+    deal_type: 'بيع',
+    wilaya: '',
+    municipality: '',
+    neighborhoods: '',
+    asking_price: '',
+    floor_price: '',
+    user_phone: ''
+  });
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (parseFloat(formData.floor_price) > parseFloat(formData.asking_price)) {
+      alert("خطأ: السعر السري يجب أن يكون أقل من أو يساوي السعر المعلن.");
+      return;
+    }
+
+    const { error } = await supabase.from('listings').insert([{
+      ...formData,
+      neighborhoods: formData.neighborhoods.split(',').map(n => n.trim()),
+      asking_price: parseFloat(formData.asking_price),
+      floor_price: parseFloat(formData.floor_price)
+    }]);
+
+    if (error) alert("خطأ في الإرسال: " + error.message);
+    else alert("تم تسجيل عقارك بنجاح في عقارMatch!");
+  };
+
+  return (
+    <div dir="rtl" className="bg-[#0a192f] text-white p-6 rounded-xl shadow-2xl max-w-md mx-auto font-sans">
+      <h2 className="text-2xl font-bold mb-6 text-center text-blue-400">عقارMatch</h2>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <select onChange={e => setFormData({...formData, deal_type: e.target.value})} className="w-full p-3 bg-[#112240] rounded border border-gray-600">
+          <option>بيع</option>
+          <option>إيجار</option>
+        </select>
+        <input type="text" placeholder="الولاية" onChange={e => setFormData({...formData, wilaya: e.target.value})} className="w-full p-3 bg-[#112240] rounded border border-gray-600" required />
+        <input type="text" placeholder="البلدية" onChange={e => setFormData({...formData, municipality: e.target.value})} className="w-full p-3 bg-[#112240] rounded border border-gray-600" required />
+        <input type="text" placeholder="الأحياء (افصل بينها بفاصلة)" onChange={e => setFormData({...formData, neighborhoods: e.target.value})} className="w-full p-3 bg-[#112240] rounded border border-gray-600" required />
+        <input type="number" placeholder="السعر المعلن (دج)" onChange={e => setFormData({...formData, asking_price: e.target.value})} className="w-full p-3 bg-[#112240] rounded border border-gray-600" required />
+        <input type="number" placeholder="السعر السري الأدنى (دج)" onChange={e => setFormData({...formData, floor_price: e.target.value})} className="w-full p-3 bg-[#112240] rounded border border-gray-600" required />
+        <input type="tel" placeholder="رقم الهاتف" onChange={e => setFormData({...formData, user_phone: e.target.value})} className="w-full p-3 bg-[#112240] rounded border border-gray-600" required />
+        <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 py-3 rounded-lg font-bold transition">إرسال العرض</button>
+      </form>
+    </div>
+  );
+}

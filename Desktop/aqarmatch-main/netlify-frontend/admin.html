@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>لوحة تحكم — عقارMatch</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: #f5f5f0; color: #1a1a2e; direction: rtl; }
+    header { background: #0F2744; color: white; padding: 1rem 2rem; }
+    header h1 { font-size: 1.4rem; }
+    header span { color: #E8A87C; }
+    .container { max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+    .card { background: white; border-radius: 12px; padding: 2rem; box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 1.5rem; }
+    input { width: 100%; padding: 0.7rem 1rem; border: 1.5px solid #ddd; border-radius: 8px; font-size: 1rem; direction: ltr; text-align: center; margin-bottom: 1rem; }
+    .btn { width: 100%; padding: 0.85rem; background: #0F2744; color: white; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; }
+    .btn:hover { background: #1a3a5c; }
+    .btn-delete { background: #c62828; color: white; border: none; border-radius: 6px; padding: 0.4rem 0.9rem; cursor: pointer; font-size: 0.85rem; font-weight: 600; }
+    .btn-delete:hover { background: #a01e1e; }
+    .error { background: #fdecea; color: #c62828; padding: 0.7rem 1rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.9rem; }
+    .listing-row { display: flex; justify-content: space-between; align-items: center; padding: 1rem; border-bottom: 1px solid #eee; gap: 1rem; }
+    .listing-row:last-child { border-bottom: none; }
+    .listing-info { flex: 1; }
+    .listing-info h3 { font-size: 0.95rem; color: #0F2744; margin-bottom: 0.3rem; }
+    .listing-info .meta { font-size: 0.78rem; color: #777; }
+    .listing-info .price { color: #E8A87C; font-weight: 700; }
+    .hidden { display: none; }
+    .loading { text-align: center; padding: 2rem; color: #888; }
+    .stats { font-size: 0.85rem; color: #666; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+<header><h1>عقار<span>Match</span> — لوحة التحكم</h1></header>
+<div class="container">
+
+  <div class="card" id="login-card">
+    <h2 style="margin-bottom:1rem">🔒 تسجيل الدخول</h2>
+    <div id="login-error"></div>
+    <input type="password" id="password-input" placeholder="كلمة المرور" onkeypress="if(event.key==='Enter') login()">
+    <button class="btn" onclick="login()">دخول</button>
+  </div>
+
+  <div class="card hidden" id="admin-card">
+    <h2 style="margin-bottom:1rem">📋 جميع الإعلانات</h2>
+    <div class="stats" id="stats"></div>
+    <div id="listings-list"><div class="loading">جاري التحميل...</div></div>
+  </div>
+
+</div>
+
+<script>
+const API = 'https://aqarmatch.onrender.com';
+let password = '';
+
+function login() {
+  password = document.getElementById('password-input').value;
+  loadListings();
+}
+
+async function loadListings() {
+  const errDiv = document.getElementById('login-error');
+  errDiv.innerHTML = '';
+  try {
+    const res = await fetch(API + '/api/admin/listings?password=' + encodeURIComponent(password));
+    if (res.status === 401) {
+      errDiv.innerHTML = '<div class="error">كلمة المرور غير صحيحة</div>';
+      return;
+    }
+    const listings = await res.json();
+    document.getElementById('login-card').classList.add('hidden');
+    document.getElementById('admin-card').classList.remove('hidden');
+    document.getElementById('stats').textContent = 'إجمالي الإعلانات: ' + listings.length;
+    renderListings(listings);
+  } catch (e) {
+    errDiv.innerHTML = '<div class="error">تعذر الاتصال بالخادم</div>';
+  }
+}
+
+function renderListings(listings) {
+  const container = document.getElementById('listings-list');
+  if (!listings.length) {
+    container.innerHTML = '<div class="loading">لا توجد إعلانات</div>';
+    return;
+  }
+  container.innerHTML = listings.map(l => `
+    <div class="listing-row" id="row-${l.id}">
+      <div class="listing-info">
+        <h3>#${l.id} — ${l.deal_type}${l.property_type ? ' — ' + l.property_type : ''} — ${l.wilaya}، ${l.municipality}</h3>
+        <div class="meta">
+          <span class="price">${l.asking_price.toLocaleString()} دج</span>
+          · 📞 ${l.user_phone}
+          · ${l.is_active ? '🟢 نشط' : '🔴 منتهي'}
+          · ${l.days_remaining} يوم متبقي
+        </div>
+      </div>
+      <button class="btn-delete" onclick="deleteListing(${l.id})">حذف 🗑️</button>
+    </div>
+  `).join('');
+}
+
+async function deleteListing(id) {
+  if (!confirm('هل أنت متأكد من حذف هذا الإعلان نهائياً؟')) return;
+  try {
+    const res = await fetch(API + '/api/admin/listings/' + id + '?password=' + encodeURIComponent(password), {
+      method: 'DELETE'
+    });
+    if (res.ok) {
+      document.getElementById('row-' + id).remove();
+    } else {
+      alert('فشل الحذف');
+    }
+  } catch (e) {
+    alert('تعذر الاتصال بالخادم');
+  }
+}
+</script>
+</body>
+</html>
