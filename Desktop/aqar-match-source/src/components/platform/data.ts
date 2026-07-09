@@ -1,3 +1,16 @@
+// === أنواع العقارات ===
+export type PropertyTypeKey = "apartment" | "villa" | "house" | "shop" | "buildable_land" | "farmland";
+
+export const PROPERTY_TYPES: { key: PropertyTypeKey; icon: string }[] = [
+  { key: "apartment", icon: "🏢" },
+  { key: "villa", icon: "🏘️" },
+  { key: "house", icon: "🏠" },
+  { key: "shop", icon: "🏪" },
+  { key: "buildable_land", icon: "🏗️" },
+  { key: "farmland", icon: "🌾" },
+];
+
+// === الولايات المفعلة ===
 export const WILAYAS = [
   "الجزائر",
   "وهران",
@@ -7,6 +20,7 @@ export const WILAYAS = [
   "البليدة"
 ];
 
+// === بلديات الولايات ===
 const COMMUNES_MAP: Record<string, string[]> = {
   "الجزائر": [
     "سيدي امحمد", "المدنية", "بلوزداد", "باب الواد", "بولوغين", "القصبة", 
@@ -43,6 +57,24 @@ const COMMUNES_MAP: Record<string, string[]> = {
   ]
 };
 
+// دالة جلب البلديات
 export const getCommunesForWilaya = (wilaya: string): string[] => {
   return COMMUNES_MAP[wilaya] || [];
+};
+
+// === حساب الرسوم ===
+export const calcSaleFee = (amount: number): number => {
+  if (amount <= 5000000) return amount * 0.03;
+  if (amount <= 10000000) return amount * 0.025;
+  if (amount <= 20000000) return amount * 0.02;
+  return amount * 0.015;
+};
+
+// === تنسيق العملة ===
+export const formatDZD = (amount: number): string => {
+  return new Intl.NumberFormat("fr-DZ", {
+    style: "currency",
+    currency: "DZD",
+    maximumFractionDigits: 0,
+  }).format(amount);
 };
