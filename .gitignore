@@ -1,0 +1,23 @@
+# التبعيات والبناء
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# البيئة والأسرار
+.env
+.env.*
+!.env.example
+
+# النشر
+.vercel
+
+# نظام التشغيل / المحررات
+.DS_Store
+Thumbs.db
+coverage/
+
+# ملفات المستخدمين المرفوعة (تُخزَّن على القرص/وحدة تخزين — لا في Git)
+public/uploads/*
+!public/uploads/.gitkeep

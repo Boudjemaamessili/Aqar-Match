@@ -1,0 +1,510 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// عقار Match — مخطط قاعدة البيانات
+// مبادئ ثابتة:
+//   1) secretMin: سعر البائع الأدنى — داخلي 100%، لا يخرج من الخادم أبداً.
+//   2) كل الاستعلامات الساخنة مغطاة بفهارس مركّبة (بلا N+1).
+//   3) النقاط الرسوميّة تُخزَّن لقطةً (snapshot) على المطابقة لتبقى صالحة
+//      تاريخياً حتى لو تغيّر جدول الرسوم مستقبلاً.
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── الحسابات ───────────────────────────────────────────────────────────────
+
+enum UserRole {
+  /// القيم المسموحة للتسجيل: seller | buyer | agency | both
+  seller
+  buyer
+  agency
+  both
+  /// تشغيلي داخلي فقط — لا يُسنَد عبر التسجيل أبداً (ترقية يدوية/بذر)
+  admin
+}
+
+model User {
+  id                String    @id @default(cuid())
+  /// رقم الهاتف بالصيغة الدولية (+213XXXXXXXXX) — المعرف الوحيد، لا تكرار
+  phone             String    @unique
+  /// الاسم — يُضبط مرة واحدة عند إنشاء الحساب فقط (لا يتغير بالدخول)
+  name              String?
+  role              UserRole  @default(both)
+  /// اللغة المفضلة: ar | fr
+  preferredLocale   String    @default("ar")
+  // حقول الوكالات (تُطلب لاحقاً عند التحقق)
+  agencyName        String?
+  agencyRegistryNumber String?
+  isVerifiedAgency  Boolean   @default(false)
+  lastLoginAt       DateTime?
+  /// حذف ناعم (خصوصية البيانات)
+  deletedAt         DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  sessions        Session[]
+  otpCodes        OtpCode[]
+  properties      Property[]
+  searches        SearchRequest[]
+  preferences     UserPreference?
+  matchesAsSeller Match[]         @relation("MatchesAsSeller")
+  matchesAsBuyer  Match[]         @relation("MatchesAsBuyer")
+  payments        Payment[]
+  notifications   Notification[]
+  auditLogs       AuditLog[]      @relation("ActorAuditLogs")
+}
+
+/// تفضيلات المستخدم (1:1) — أوزان المطابقة المخصّصة لاحقاً حسب سلوكه
+model UserPreference {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  /// JSON مُسلسَل لـ ScoringWeights — null = أوزان المحرك الافتراضية
+  matchingWeights String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// جلسة دخول — نخزّن بصمة الرمز فقط (SHA-256)، لا الرمز نفسه
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  userAgent String?
+  /// بصمة IP (لا نخزّن العنوان صراحة)
+  ipHash    String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+enum OtpPurpose {
+  LOGIN
+}
+
+/// رموز OTP — تُخزَّن مشفّرة (HMAC)، بمقاومة تخمين (maxAttempts) وانتهاء صلاحية
+model OtpCode {
+  id          String     @id @default(cuid())
+  /// قد لا يكون الرقم مسجّلاً بعد (تسجيل ذاتي أول دخول)
+  userId      String?
+  user        User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phone       String
+  codeHash    String
+  purpose     OtpPurpose @default(LOGIN)
+  attempts    Int        @default(0)
+  maxAttempts Int        @default(5)
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  createdAt   DateTime   @default(now())
+
+  @@index([phone, createdAt])
+  /// لعامل تنظيف الرموز المنتهية (المرحلة 8)
+  @@index([expiresAt])
+}
+
+// ─── الجغرافيا (الموقع الرسمي: 7 ولايات × كل بلدياتها) ─────────────────────
+
+model Wilaya {
+  code     Int     @id
+  slug     String  @unique
+  nameAr   String
+  nameFr   String
+  isActive Boolean @default(false)
+
+  communes       Commune[]
+  properties     Property[]
+  searchRequests SearchRequest[]
+  blogPosts      BlogPost[]
+}
+
+model Commune {
+  /// المعرف الرسمي العام (ثابت — يأتي من مولّد البيانات)
+  id       Int     @id
+  wilayaCode Int
+  wilaya   Wilaya  @relation(fields: [wilayaCode], references: [code])
+  slug     String
+  nameAr   String
+  nameFr   String
+  dairaAr  String
+  dairaFr  String
+
+  properties Property[]
+
+  @@unique([wilayaCode, slug])
+  @@index([wilayaCode])
+}
+
+// ─── العقارات ───────────────────────────────────────────────────────────────
+
+enum TransactionType {
+  SALE
+  RENT
+  SEASONAL_RENT
+}
+
+enum PropertyType {
+  APARTMENT
+  HOUSE
+  VILLA
+  LAND
+  COMMERCIAL
+  OFFICE
+  STUDIO
+}
+
+enum PropertyCondition {
+  NEW
+  GOOD
+  RENOVATED
+  TO_RENOVATE
+  UNDER_CONSTRUCTION
+}
+
+enum PropertyStatus {
+  ACTIVE
+  /// منشور بلا حساب مرتبط (نشر مجهول — يُراقَب لاحقاً عند ربط هاتفه بحساب)
+  UNMONITORED
+  PAUSED
+  SOLD
+  RENTED
+  WITHDRAWN
+}
+
+enum ListingSource {
+  MANUAL
+  BULK_IMPORT
+}
+
+/// نوع حساب الناشر (فرد/وكالة) — يُخزَّن على العقار نفسه كما أدخله الناشر
+enum AccountType {
+  INDIVIDUAL
+  AGENCY
+}
+
+/// الوضعية القانونية للعقار (وثائق الملكية الجزائرية الشائعة)
+enum LegalStatus {
+  /// عقد موثق (acte notarié)
+  NOTARIZED_DEED
+  /// دفتر عقاري (livret foncier)
+  LAND_TITLE
+  /// وعد بالبيع (promesse de vente)
+  PROMISE_OF_SALE
+  /// قرار امتياز/تخصيص (décision d'attribution)
+  ALLOCATION_DECISION
+  /// عقد عرفي (sous-seing privé)
+  PRIVATE_AGREEMENT
+  /// قيد التسوية (en cours de régularisation)
+  IN_REGULARIZATION
+}
+
+model Property {
+  id              String            @id @default(cuid())
+  /// اختياري: null = نشر مجهول (الحالة UNMONITORED ويتوفر ownerPhone للربط لاحقاً)
+  sellerId        String?
+  seller          User?             @relation(fields: [sellerId], references: [id])
+  transactionType TransactionType
+  propertyType    PropertyType
+  condition       PropertyCondition @default(GOOD)
+  status          PropertyStatus    @default(ACTIVE)
+  source          ListingSource     @default(MANUAL)
+  /// كما صرّح الناشر (قد يختلف عن دور المستخدم المرتبط)
+  accountType     AccountType       @default(INDIVIDUAL)
+  /// وثيقة الملكية المصرّح بها — اختياري (يصبّ في اكتمال البيانات لاحقاً)
+  legalStatus     LegalStatus?
+
+  // جهة اتصال المالك المصرّح بها عند النشر
+  ownerName       String?
+  /// 🔒 هاتف المالك — داخلي 100%: يُكشف فقط بعد اكتمال تدفق المطابقة والدفع
+  ///    (مثل secretMin تماماً). يُخزَّن بالصيغة الدولية +213XXXXXXXXX.
+  ownerPhone      String?
+
+  wilayaCode Int
+  wilaya     Wilaya  @relation(fields: [wilayaCode], references: [code])
+  communeId  Int
+  commune    Commune @relation(fields: [communeId], references: [id])
+  /// اسم الحي كما أدخله البائع
+  neighborhood    String?
+  /// نسخة مُطبَّعة (lowercase/btrim) لمطابقة الأحياء في الطبقة المكانية
+  neighborhoodKey String?
+  /// العنوان التفصيلي — داخلي فقط، لا يُعرض قبل كشف التواصل
+  address         String?
+
+  titleAr     String
+  titleFr     String?
+  description String?
+
+  areaM2      Float?
+  rooms       Int?
+  bathrooms   Int?
+  floor       Int?
+  totalFloors Int?
+  /// عدد الواجهات — مهم للأراضي والمنازل والمحلات في السوق الجزائري
+  facades     Int?
+  /// null = غير محدد (يُحتسب في درجة اكتمال البيانات)
+  furnished   Boolean?
+  hasParking  Boolean?
+  hasElevator Boolean?
+  hasGarden   Boolean?
+  /// مزايا الإيجار الموسمي المهيكلة (سعة، مسافة الشاطئ، تكييف، مسبح…)
+  /// — JSON مُتحقَّق منه عبر Zod في طبقة الـ API (مالك الحقل أنواعها)
+  seasonalFeatures Json?
+
+  /// السعر المطلوب المعلن
+  askingPrice Decimal @db.Decimal(14, 0)
+  /// 🔒 الحد الأدنى السري — يُمنع تسريبه لأي استجابة (server-only)
+  secretMin   Decimal @db.Decimal(14, 0)
+  currency    String  @default("DZD")
+
+  views  Int  @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  images  PropertyImage[]
+  matches Match[]
+
+  // المسار الساخن لمحرك المطابقة (فلاتر صارمة)
+  @@index([status, transactionType, propertyType, wilayaCode])
+  @@index([communeId])
+  @@index([sellerId, status])
+}
+
+model PropertyImage {
+  id         String   @id @default(cuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  /// مسار التخزين الآمن (نسبي — يُخدم عبر موقّع/موصّل التخزين)
+  url        String
+  mimeType   String
+  width      Int
+  height     Int
+  sizeBytes  Int
+  isPrimary  Boolean  @default(false)
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([propertyId, sortOrder])
+}
+
+// ─── طلبات البحث (المشتري) ──────────────────────────────────────────────────
+
+enum SearchRequestStatus {
+  ACTIVE
+  PAUSED
+  FULFILLED
+  CANCELLED
+}
+
+model SearchRequest {
+  id              String              @id @default(cuid())
+  buyerId         String
+  buyer           User                @relation(fields: [buyerId], references: [id])
+  status          SearchRequestStatus @default(ACTIVE)
+  transactionType TransactionType
+  propertyType    PropertyType
+  wilayaCode      Int
+  wilaya          Wilaya              @relation(fields: [wilayaCode], references: [code])
+  /// null = كامل الولاية (الطبقة المكانية تمنح 70)
+  communeId       Int?
+  /// أحياء مفضّلة مُطبَّعة — لمطابقة «نفس الحي»
+  neighborhoods   String[]            @default([])
+  maxBudget       Decimal             @db.Decimal(14, 0)
+  // رغبات مرنة (Soft Features)
+  minAreaM2       Float?
+  minRooms        Int?
+  minBathrooms    Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  matches Match[]
+
+  // عكس مسار المطابقة: إيجاد الطلبات المرشّحة لعقار جديد
+  @@index([status, transactionType, propertyType, wilayaCode])
+  @@index([buyerId, status])
+}
+
+// ─── المطابقات وتدفق الدفع/الموافقة ─────────────────────────────────────────
+
+/// التدفق: SELLER_NOTIFIED → SELLER_AGREED → BUYER_PAID → CONTACT_REVEALED
+/// انتهاء المهلة (48 ساعة) ⇒ EXPIRED ثم التصعيد للتطابق التالي (worker خارجي)
+enum MatchStatus {
+  SELLER_NOTIFIED
+  SELLER_AGREED
+  BUYER_PAID
+  CONTACT_REVEALED
+  EXPIRED
+  CANCELLED
+}
+
+model Match {
+  id              String       @id @default(cuid())
+  propertyId      String
+  property        Property     @relation(fields: [propertyId], references: [id])
+  searchRequestId String
+  searchRequest   SearchRequest @relation(fields: [searchRequestId], references: [id])
+  /// إزالة تطبيع مقصودة لسرعة الاستعلامات من جهة كل طرف.
+  /// اختياري: عقار UNMONITORED (بلا حساب) يطابق أيضاً بلا بائع مرتبط —
+  /// تواصله عبر Property.ownerPhone بعد الكشف (إشعاره: SMS — المرحلة 8).
+  sellerId        String?
+  seller          User?        @relation("MatchesAsSeller", fields: [sellerId], references: [id])
+  buyerId         String
+  buyer           User         @relation("MatchesAsBuyer", fields: [buyerId], references: [id])
+
+  // ── تفصيل النقاط — داخلي فقط، لا يُعاد في واجهات العرض العامة ──
+  internalScore  Int
+  displayedScore Int
+  spatialScore   Int
+  priceScore     Int
+  softScore      Int
+
+  /// لقطة رسوم البائع وقت المطابقة (من جدول الرسوم آنذاك)
+  feeSeller Decimal @db.Decimal(14, 0)
+  /// المشتري مجاني حالياً — يبقى الحقل لدعم التفعيل مستقبلاً
+  feeBuyer  Decimal @default(0) @db.Decimal(14, 0)
+
+  status     MatchStatus @default(SELLER_NOTIFIED)
+  /// مهلة البائع: تُضبط = createdAt + 48 ساعة
+  respondBy  DateTime
+  sellerAgreedAt DateTime?
+  buyerPaidAt    DateTime?
+  revealedAt     DateTime?
+  expiredAt      DateTime?
+  cancelledAt    DateTime?
+  cancelReason   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  payments Payment[]
+
+  /// لا ازدواجية: مطابقة واحدة لكل (عقار × طلب)
+  @@unique([propertyId, searchRequestId])
+  /// مسار عامل التصعيد (cron): المنتهية الصلاحية
+  @@index([status, respondBy])
+  @@index([sellerId, status])
+  @@index([buyerId, status])
+}
+
+enum PaymentPurpose {
+  SELLER_MATCH_FEE
+  BUYER_MATCH_FEE
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+model Payment {
+  id       String         @id @default(cuid())
+  matchId  String
+  match    Match          @relation(fields: [matchId], references: [id])
+  payerId  String
+  payer    User           @relation(fields: [payerId], references: [id])
+  purpose  PaymentPurpose
+  amount   Decimal        @db.Decimal(14, 0)
+  currency String         @default("DZD")
+  status   PaymentStatus  @default(PENDING)
+  /// مزوّد الدفع (CIB/EDAHABIA) — يُربط في مرحلة المدفوعات
+  provider    String?
+  providerRef String?
+  paidAt      DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([matchId])
+  @@index([payerId, status])
+}
+
+// ─── الإشعارات ──────────────────────────────────────────────────────────────
+
+enum NotificationType {
+  MATCH_FOUND
+  MATCH_AGREED
+  BUYER_PAID
+  CONTACT_REVEALED
+  MATCH_EXPIRED
+  MATCH_CANCELLED
+  SYSTEM
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  /// حمولة JSON صغيرة (معرفات فقط — بلا بيانات حساسة)
+  payload   Json?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, createdAt])
+}
+
+// ─── المحتوى (المدونة وصفحات الهبوط — المرحلة 7) ────────────────────────────
+
+enum BlogStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model BlogPost {
+  id          String     @id @default(cuid())
+  slug        String
+  /// ar | fr — نفس المقال بنسختين مستقلتين لأفضل SEO
+  locale      String
+  title       String
+  excerpt     String?
+  content     String     @db.Text
+  coverImageUrl String?
+  category    String
+  tags        String[]   @default([])
+  seoTitle       String?
+  seoDescription String?
+  status      BlogStatus @default(DRAFT)
+  /// ربط اختياري بصفحة هبوط ولاية
+  wilayaCode  Int?
+  wilaya      Wilaya?    @relation(fields: [wilayaCode], references: [code])
+  publishedAt DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@unique([locale, slug])
+  @@index([locale, status, publishedAt])
+}
+
+// ─── أدوات تشغيلية ──────────────────────────────────────────────────────────
+
+/// إعدادات مفتاح/قيمة: أوزان المطابقة الديناميكية، أعلام الميزات…
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+/// سجل تدقيق أمني (أفعال حساسة: دفع، كشف تواصل، استيراد جماعي…)
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  actor     User?    @relation("ActorAuditLogs", fields: [actorId], references: [id], onDelete: SetNull)
+  action    String
+  entity    String
+  entityId  String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+}
